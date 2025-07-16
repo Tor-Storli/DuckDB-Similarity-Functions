@@ -1,0 +1,866 @@
+---
+title: "DuckDB Text Similarity Functions"
+subtitle: "A Guide to String Similarity Analysis"
+author: "Tor Storli"
+date: today
+format:
+  html:
+    theme:
+     - cosmo
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+    embed-resources: true
+    smooth-scroll: true
+    css: |
+      .similarity-info {
+        background-color: #e8f5e8;
+        border-left: 4px solid #28a745;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 0.25rem;
+      }
+      .function-highlight {
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 0.25rem;
+      }
+      .real-world-example {
+        background-color: #f8f9fa;
+        border-left: 4px solid #007bff;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 0.25rem;
+      }
+      .performance-tip {
+        background-color: #e2e3e5;
+        border: 1px solid #d6d8db;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 0.25rem;
+      }
+execute:
+  warning: false
+  message: false
+  cache: true
+---
+
+```{python setup} 
+# {python setup} Prepare the environment for the rest of the document.
+import duckdb
+import pandas as pd
+import numpy as np
+from great_tables import GT, md, html, loc
+from IPython.display import display, HTML
+import warnings
+warnings.filterwarnings('ignore') # suppresses all warning messages in output
+
+# Connect to DuckDB
+conn = duckdb.connect()
+```
+
+# Introduction {#sec-introduction}
+
+Text similarity functions can be used to measure how similar two strings are to each other. DuckDB provides a variety of similarity functions that can handle various use cases from spell checking to fuzzy search and data deduplication.
+
+::: {.similarity-info}
+**Key Applications:**
+- Spell checking and typo detection
+- Fuzzy search systems
+- Customer data deduplication
+- Product matching and recommendations
+- Brand name similarity analysis
+:::
+
+## Overview of Functions
+
+DuckDB offers eight powerful text similarity functions:
+
+| Function | Type | Description |
+|----------|------|-------------|
+| `levenshtein(s1, s2)` | Distance | Minimum single-character edits (insertions, deletions, substitutions) |
+| `damerau_levenshtein(s1, s2)` | Distance | Includes transpositions in addition to basic edits |
+| `hamming(s1, s2)` | Distance | Character differences for equal-length strings |
+| `editdist3(s1, s2)` | Distance | Alternative edit distance implementation |
+| `jaccard(s1, s2)` | Similarity | Character overlap similarity (0-1) |
+| `jaro_similarity(s1, s2)` | Similarity | Character order and distance similarity (0-1) |
+| `jaro_winkler_similarity(s1, s2)` | Similarity | Jaro with prefix bonus (0-1) |
+| `mismatches(s1, s2)` | Distance | Identical to Hamming distance |
+
+# Setup and Test Data {#sec-setup}
+
+Let's create comprehensive test datasets to demonstrate these functions:
+
+```{python test-data}
+# Create test datasets
+demo_data = conn.execute("""
+    CREATE OR REPLACE TABLE demo_data AS
+    SELECT * FROM VALUES
+        ('apple', 'aple'),           -- Common typo
+        ('google', 'gogle'),         -- Missing letter
+        ('facebook', 'facbook'),     -- Missing letters
+        ('microsoft', 'mircosoft'),  -- Transposition
+        ('amazon', 'amzon'),         -- Missing letters
+        ('netflix', 'netflex'),      -- Wrong letter
+        ('spotify', 'spotfy'),       -- Missing letter
+        ('twitter', 'twtter'),       -- Missing letter
+        ('linkedin', 'linkdin'),     -- Missing letter
+        ('youtube', 'youtub')        -- Missing letter
+    AS t(original, typo);
+""").df()
+
+# Create sentence-level test data for matrix analysis
+sentence_data = conn.execute("""
+    CREATE OR REPLACE TABLE sentence_data AS
+    SELECT * FROM VALUES
+        ('The quick brown fox jumps over the lazy dog'),
+        ('A quick brown fox leaps over a lazy dog'),
+        ('The fast brown fox jumps over the sleeping dog'),
+        ('The quick red fox jumps over the lazy cat'),
+        ('Machine learning is transforming data science'),
+        ('Artificial intelligence is revolutionizing data analysis'),
+        ('Deep learning algorithms are advancing rapidly'),
+        ('Natural language processing enables text analysis')
+    AS t(sentence);
+""").df()
+
+print("Test data created successfully!")
+```
+
+## Display Word-Data {#word-data}
+
+```{python word-data}
+# Display word data
+worddata = conn.execute("""
+    SELECT 
+        original,
+        typo
+    FROM demo_data
+""").df()
+
+display(worddata)
+```
+
+## Display Sentence-Data {#sentence-data}
+
+```{python sentence-data}
+# Display sentence data
+sentencedata = conn.execute("""
+    SELECT 
+       sentence
+    FROM sentence_data
+""").df()
+
+display(sentencedata)
+```
+
+# Distance-Based Functions {#sec-distance}
+
+## Levenshtein Distance {#sec-levenshtein}
+
+The Levenshtein distance measures the minimum number of single-character edits needed to transform one string into another.
+
+```{python levenshtein}
+# Basic Levenshtein distance examples
+basic_results = conn.execute("""
+    SELECT 
+        original,
+        typo,
+        levenshtein(original, typo) as edit_distance
+    FROM demo_data
+    ORDER BY edit_distance
+""").df()
+
+display(basic_results)
+```
+
+::: {.function-highlight}
+**Levenshtein Distance Characteristics:**
+- Only considers insertions, deletions, and substitutions
+- Does not handle character transpositions efficiently
+- Perfect for simple typo detection
+- Case-sensitive by default
+:::
+
+```{python levenshtein-analysis}
+# Categorize match quality
+quality_analysis = conn.execute("""
+    SELECT 
+        original,
+        typo,
+        levenshtein(original, typo) as distance,
+        CASE 
+            WHEN levenshtein(original, typo) <= 1 THEN 'Excellent match'
+            WHEN levenshtein(original, typo) <= 2 THEN 'Good match'
+            WHEN levenshtein(original, typo) <= 3 THEN 'Fair match'
+            ELSE 'Poor match'
+        END as match_quality
+    FROM demo_data
+    ORDER BY distance
+""").df()
+
+display(quality_analysis)
+```
+
+## Damerau-Levenshtein Distance {#sec-damerau}
+
+This extends Levenshtein distance to include transpositions (character swaps) as a single edit operation.
+
+```{python damerau}
+# Compare standard and Damerau-Levenshtein
+comparison_results = conn.execute("""
+    SELECT 
+        original,
+        typo,
+        levenshtein(original, typo) as standard_distance,
+        damerau_levenshtein(original, typo) as damerau_distance,
+        levenshtein(original, typo) - damerau_levenshtein(original, typo) as difference
+    FROM demo_data
+    ORDER BY difference DESC
+""").df()
+
+display(comparison_results)
+```
+
+## Hamming Distance {#sec-hamming}
+
+Hamming distance counts character differences between equal-length strings.
+
+```{python hamming}
+# Hamming distance examples
+hamming_examples = conn.execute("""
+    SELECT 
+        str1, str2,
+        hamming(str1, str2) as hamming_dist,
+        LENGTH(str1) as string_length
+    FROM VALUES
+        ('HELLO', 'HALLO'),
+        ('WORLD', 'WORDS'),
+        ('ABC123', 'ABC124'),
+        ('XYZ789', 'XYZ788')
+    AS t(str1, str2)
+""").df()
+
+display(hamming_examples)
+```
+
+::: {.performance-tip}
+**Hamming Distance Use Cases:**
+- Fixed-length product codes
+- DNA sequence comparison
+- Error detection in communications
+- Quality control for standardized formats
+:::
+
+# Similarity-Based Functions {#sec-similarity}
+
+## Jaccard Similarity {#sec-jaccard}
+
+Jaccard similarity measures the overlap between character sets of two strings.
+
+```{python jaccard}
+# Jaccard similarity analysis
+jaccard_results = conn.execute("""
+    SELECT 
+        original,
+        typo,
+        jaccard(original, typo) as jaccard_similarity,
+        ROUND(jaccard(original, typo) * 100, 1) as percentage
+    FROM demo_data
+    ORDER BY jaccard_similarity DESC
+""").df()
+
+display(jaccard_results)
+```
+
+# Jaccard Similarity Analysis
+
+## Formula
+
+The Jaccard similarity coefficient is calculated using the following formula:
+
+`Jaccard(A,B) = |A ∩ B| / |A ∪ B|`
+
+Where:
+- **A ∩ B** = intersection (shared characters)
+- **A ∪ B** = union (all unique characters from both strings)
+
+## Detailed Examples
+
+### Example 1: "apple" vs "aple" → 1.000 (100%)
+
+**Character sets:**
+- "apple" → {a, p, p, l, e} → unique chars: {a, p, l, e}
+- "aple" → {a, p, l, e} → unique chars: {a, p, l, e}
+
+**Calculation:**
+- Intersection: {a, p, l, e} → 4 characters
+- Union: {a, p, l, e} → 4 characters
+- Jaccard = 4/4 = 1.000
+
+**Key insight:** The missing 'p' doesn't matter because Jaccard only counts unique characters!
+
+### Example 2: "microsoft" vs "mircosoft" → 1.000 (100%)
+
+**Character sets:**
+- "microsoft" → {m, i, c, r, o, s, o, f, t} → unique chars: {m, i, c, r, o, s, f, t}
+- "mircosoft" → {m, i, r, c, o, s, o, f, t} → unique chars: {m, i, r, c, o, s, f, t}
+
+**Calculation:**
+- Intersection: {m, i, c, r, o, s, f, t} → 8 characters
+- Union: {m, i, c, r, o, s, f, t} → 8 characters
+- Jaccard = 8/8 = 1.000
+
+**Key insight:** The character order doesn't matter, and both strings contain exactly the same unique characters!
+
+### Example 3: "amazon" vs "amzon" → 1.000 (100%)
+
+**Character sets:**
+- "amazon" → {a, m, a, z, o, n} → unique chars: {a, m, z, o, n}
+- "amzon" → {a, m, z, o, n} → unique chars: {a, m, z, o, n}
+
+**Calculation:**
+- Intersection: {a, m, z, o, n} → 5 characters
+- Union: {a, m, z, o, n} → 5 characters
+- Jaccard = 5/5 = 1.000
+
+### Example 4: "facebook" vs "facbook" → 0.857 (85.7%)
+
+**Character sets:**
+- "facebook" → {f, a, c, e, b, o, o, k} → unique chars: {f, a, c, e, b, o, k}
+- "facbook" → {f, a, c, b, o, o, k} → unique chars: {f, a, c, b, o, k}
+
+**Calculation:**
+- Intersection: {f, a, c, b, o, k} → 6 characters
+- Union: {f, a, c, e, b, o, k} → 7 characters (includes 'e' from "facebook")
+- Jaccard = 6/7 = 0.857
+
+**Key insight:** This one is different because the 'e' is completely missing from "facbook"!
+
+
+## Jaro and Jaro-Winkler Similarity {#sec-jaro}
+
+These functions consider character order and give extra weight to matching prefixes.
+
+```{python jaro-comparison}
+# Compare Jaro and Jaro-Winkler
+jaro_comparison = conn.execute("""
+SELECT 
+    original,
+    typo,
+    jaro_similarity(original, typo) AS jaro_sim,
+    jaro_winkler_similarity(original, typo) AS jaro_winkler_sim,
+    -- Simple prefix calculation using substr
+    LEAST(4, CASE 
+        WHEN substr(original, 1, 4) = substr(typo, 1, 4) THEN 4
+        WHEN substr(original, 1, 3) = substr(typo, 1, 3) THEN 3  
+        WHEN substr(original, 1, 2) = substr(typo, 1, 2) THEN 2
+        WHEN substr(original, 1, 1) = substr(typo, 1, 1) THEN 1
+        ELSE 0 END) AS prefix_length,
+    -- Calculate prefix bonus in one line
+    ROUND(LEAST(4, CASE 
+        WHEN substr(original, 1, 4) = substr(typo, 1, 4) THEN 4
+        WHEN substr(original, 1, 3) = substr(typo, 1, 3) THEN 3  
+        WHEN substr(original, 1, 2) = substr(typo, 1, 2) THEN 2
+        WHEN substr(original, 1, 1) = substr(typo, 1, 1) THEN 1
+        ELSE 0 END) * 0.1 * (1 - jaro_similarity(original, typo)) * 100, 2) AS prefix_bonus
+FROM demo_data
+""").df()
+
+display(jaro_comparison)
+```
+
+# Jaro-Winkler Similarity Calculations
+
+## Formulas
+
+### Jaro Similarity
+$\text{Jaro}(s_1, s_2) = \frac{1}{3} \left( \frac{m}{|s_1|} + \frac{m}{|s_2|} + \frac{m-t}{m} \right)$
+
+Where:  
+ $m$ = number of matching characters  
+ $t$ = number of transpositions  
+ $|s_1|, |s_2|$ = lengths of strings  
+
+### Jaro-Winkler Similarity
+$\text{Jaro-Winkler}(s_1, s_2) = \text{Jaro}(s_1, s_2) + (l \times p \times (1 - \text{Jaro}(s_1, s_2)))$
+
+Where:  
+ $l$ = length of common prefix (up to 4 characters)  
+ $p$ = prefix scaling factor (typically 0.1)  
+
+### Prefix Bonus
+$\text{Prefix Bonus} = l \times p \times 100$
+
+### Understanding the Prefix Bonus
+
+The **prefix bonus** in the Jaro-Winkler algorithm is an additional score boost given to strings that share common characters at the beginning (prefix). It's based on the observation that people are more likely to type the beginning of words correctly than the end.
+
+### How Prefix Bonus Works  
+
+The prefix bonus is calculated as:  
+
+$$\text{Prefix Bonus} = l \times p \times (1 - \text{Jaro Score})$$  
+
+Where:  
+ **l** = length of common prefix (up to maximum of 4 characters)  
+ **p** = prefix scaling factor (typically 0.1)  
+ **(1 - Jaro Score)** = the "room for improvement" in the base Jaro score  
+
+### Why It Matters  
+
+The prefix bonus reflects real-world typing behavior:  
+
+**People start words correctly** - When typing "microsoft", you're more likely to get "mic..."   right than the ending.
+
+**Typos occur later** - Errors typically happen toward the middle or end of words.  
+
+**Recognition patterns** - Humans often recognize words from their first few letters.  
+
+## Examples from our Words Table    
+
+### "netflix" vs "netflex" 
+
+ Common prefix: "netfl" (4 characters)  
+ Prefix bonus helps boost the similarity because they start identically  
+ The error (i↔x swap) happens at the end  
+
+### "apple" vs "aple"  
+
+ Common prefix: "ap" (2 characters)    
+ Even though a letter is missing, the word starts correctly  
+ Gets bonus points for the correct beginning  
+
+### "microsoft" vs "mircosoft"  
+
+ Common prefix: "mi" (2 characters)  
+ The transposition (c↔r) happens early, limiting the prefix length  
+ Smaller prefix bonus reflects this early divergence  
+
+## Practical Impact  
+
+The prefix bonus makes Jaro-Winkler particularly good for:  
+
+**Autocomplete systems** - Matching partially typed words where users typically start correctly.  
+
+**Spell checkers** - Finding corrections for words with ending typos while preserving correct beginnings.  
+
+**Data deduplication** - Matching names or terms with common beginnings but slight variations at the end.  
+
+## The Key Insight  
+
+Without the prefix bonus, "netflix" vs "netflex" would be penalized equally for the i↔x swap regardless of where it occurs. With the bonus, the algorithm recognizes that starting correctly is more significant than ending correctly, reflecting how humans actually process and type words.  
+
+## Detailed Calculations
+
+### Example 1: "apple" vs "aple"
+
+**Step 1: Find matching characters**  
+ String 1: "apple" (length = 5)  
+ String 2: "aple" (length = 4)  
+ Matching window = $\text{floor}(\max(5,4)/2) - 1 = \text{floor}(2.5) - 1 = 2 - 1 = 1$  
+
+**Matching window = 1**  
+
+For each character in "apple", it can match within ±1 position in "aple":  
+
+ **a** (pos 0): Can match positions 0±1 = [0,1] → matches **a** at pos 0 ✓  
+ **p** (pos 1): Can match positions 1±1 = [0,2] → matches **p** at pos 1 ✓    
+ **p** (pos 2): Can match positions 2±1 = [1,3] → no available match (p at pos 1 already used) ✗  
+ **l** (pos 3): Can match positions 3±1 = [2,4] → matches **l** at pos 2 ✓  
+ **e** (pos 4): Can match positions 4±1 = [3,5] → matches **e** at pos 3 ✓  
+
+**Key insight:** The narrow window of 1 means characters must be very close to their expected positions. The second 'p' in "apple" cannot find a match because the first 'p' in "aple" is already used, and there are no other 'p' characters within the allowed window.
+
+### Summary  
+
+The matching window size directly affects how tolerant the algorithm is to positional differences:  
+
+ **Larger windows** (like 3) are more forgiving of character swaps and rearrangements  
+ **Smaller windows** (like 1) require characters to be in nearly the same positions  
+
+**Character matching:**    
+ a (pos 0) matches a (pos 0) ✓    
+ p (pos 1) matches p (pos 1) ✓    
+ p (pos 2) matches l (pos 2) ✗    
+ l (pos 3) matches e (pos 3) ✗    
+ e (pos 4) matches - ✗    
+
+**But within window:**    
+ l (pos 3) matches l (pos 2) ✓    
+ e (pos 4) matches e (pos 3) ✓    
+
+**Results:**  
+ $m = 4$ matching characters (a, p, l, e)    
+ $t = 0$ transpositions  
+
+**Jaro calculation:**  
+$\text{Jaro} = \frac{1}{3} \left( \frac{4}{5} + \frac{4}{4} + \frac{4-0}{4} \right) = \frac{1}{3} \times (0.8 + 1.0 + 1.0) = \frac{1}{3} \times 2.8 = 0.933333$  
+
+**Common prefix:** "ap" = 2 characters ($l = 2$)    
+
+**Jaro-Winkler calculation:**  
+$\text{Jaro-Winkler} = 0.933333 + (2 \times 0.1 \times (1 - 0.933333)) = 0.933333 + 0.013333 = 0.946667$    
+
+**Prefix bonus:** $2 \times 0.1 \times 100 = 2.0$ (Note: table shows 1.33, suggesting different calculation)
+
+---
+
+### Example 2: "microsoft" vs "mircosoft"  
+
+**Step 1: Find matching characters**  
+ String 1: "microsoft" (length = 9)    
+ String 2: "mircosoft" (length = 9)    
+ Matching window = $\text{floor}(\max(9,9)/2) - 1 = \text{floor}(4.5) - 1 = 4 - 1 = 3$  
+
+## Interpreting the Matching Window  
+
+The **matching window = 3**   means that when looking for character matches, a character at position `i` in one string can match with any character at positions `i-3` through `i+3` in the other string.
+
+### Example: "microsoft" vs "mircosoft"  
+
+For each character in "microsoft", it can match within ±3 positions in "mircosoft":  
+
+ **m** (pos 0): Can match positions 0±3 = [0,3] → matches **m** at pos 0 ✓  
+ **i** (pos 1): Can match positions 1±3 = [0,4] → matches **i** at pos 1 ✓    
+ **c** (pos 2): Can match positions 2±3 = [0,5] → matches **c** at pos 3 ✓  
+ **r** (pos 3): Can match positions 3±3 = [0,6] → matches **r** at pos 2 ✓  
+ **o** (pos 4): Can match positions 4±3 = [1,7] → matches **o** at pos 4 ✓  
+ **s** (pos 5): Can match positions 5±3 = [2,8] → matches **s** at pos 5 ✓  
+ **o** (pos 6): Can match positions 6±3 = [3,9] → matches **o** at pos 6 ✓  
+ **f** (pos 7): Can match positions 7±3 = [4,10] → matches **f** at pos 7 ✓  
+ **t** (pos 8): Can match positions 8±3 = [5,11] → matches **t** at pos 8 ✓  
+
+## Key Insight  
+
+The window of 3 is generous enough to catch the transposed characters:  
+
+ 'c' at position 2 in "microsoft" can match 'c' at position 3 in "mircosoft"   
+ 'r' at position 3 in "microsoft" can match 'r' at position 2 in "mircosoft"  
+
+This flexibility allows the Jaro algorithm to recognize that "cr" and "rc" are the same characters just swapped (transposed), rather than treating them as completely different characters.  
+
+**Character matching:**    
+ All characters match except for the transposition of 'c' and 'r'    
+
+**Results:**  
+ $m = 9$ matching characters  
+ $t = 1$ transposition (c and r are swapped)  
+
+**Jaro calculation:**  
+$\text{Jaro} = \frac{1}{3} \left( \frac{9}{9} + \frac{9}{9} + \frac{9-1}{9} \right) = \frac{1}{3} \times (1.0 + 1.0 + 0.889) = \frac{1}{3} \times 2.889 = 0.962963$
+
+**Common prefix:** "mi" = 2 characters ($l = 2$)  
+
+**Jaro-Winkler calculation:**  
+$\text{Jaro-Winkler} = 0.962963 + (2 \times 0.1 \times (1 - 0.962963)) = 0.962963 + 0.007407 = 0.970370$
+
+**Prefix bonus:** $2 \times 0.1 \times 100 = 2.0$ (Note: table shows 0.74, suggesting different calculation)
+
+---
+
+## Key Observations
+
+The Jaro-Winkler algorithm demonstrates several important characteristics:
+
+**Jaro similarity** focuses on matching characters and their positions, with penalties for transpositions. It provides a foundation score based on character overlap and positional accuracy.
+
+**Jaro-Winkler enhancement** adds a bonus for common prefixes, making the algorithm more forgiving of differences at the end of strings. This reflects the intuition that people are more likely to type the beginning of words correctly.
+
+**Prefix bonus** values in the table appear to use a different scaling or calculation method than the standard formula, suggesting possible implementation variations or additional normalization steps.
+
+The algorithm is particularly effective for typos that involve character swaps or missing characters near the end of words, making it well-suited for fuzzy string matching in applications like spell checking and data deduplication.
+
+# Real-World Applications {#sec-applications}
+
+## Fuzzy Product Search {#sec-product-search}
+
+::: {.real-world-example}
+**Scenario:** Building a product search system that handles typos and partial matches.
+:::
+
+```{python product-search}
+# Create product catalog
+product_setup = conn.execute("""
+    CREATE OR REPLACE TABLE products AS
+    SELECT * FROM VALUES
+        ('iPhone 15 Pro Max 256GB'),
+        ('Samsung Galaxy S24 Ultra'),
+        ('Google Pixel 8 Pro'),
+        ('MacBook Pro 16-inch M3'),
+        ('Dell XPS 13 Plus'),
+        ('HP Spectre x360 14'),
+        ('Lenovo ThinkPad X1 Carbon'),
+        ('Microsoft Surface Pro 9'),
+        ('iPad Air 5th Generation'),
+        ('AirPods Pro 2nd Generation')
+    AS t(product_name)
+""").df()
+
+# Fuzzy search implementation
+search_results = conn.execute("""
+    WITH search_query AS (
+        SELECT 'iphone pro max' as query
+    ),
+    search_results AS (
+        SELECT 
+            product_name,
+            query,
+            levenshtein(LOWER(product_name), LOWER(query)) as edit_distance,
+            jaccard(LOWER(product_name), LOWER(query)) as jaccard_sim,
+            jaro_winkler_similarity(LOWER(product_name), LOWER(query)) as jw_sim
+        FROM products
+        CROSS JOIN search_query
+    )
+    SELECT 
+        product_name,
+        edit_distance,
+        ROUND(jaccard_sim * 100, 1) as jaccard_percent,
+        ROUND(jw_sim * 100, 1) as jw_percent,
+        CASE 
+            WHEN jw_sim >= 0.8 THEN 'Excellent match'
+            WHEN jw_sim >= 0.6 THEN 'Good match'
+            WHEN jw_sim >= 0.4 THEN 'Fair match'
+            ELSE 'Poor match'
+        END as match_quality
+    FROM search_results
+    WHERE edit_distance <= 15 OR jaccard_sim >= 0.2 OR jw_sim >= 0.3
+    ORDER BY jw_sim DESC
+""").df()
+
+display(search_results)
+```
+
+#### Explanation for Edit Distance
+
+| Sentence | Length |
+|----------|--------|
+| iphone pro max | 14 |
+| iPhone 15 Pro Max 256GB | 23 |
+| Missing Characters | 9 |
+
+
+## Customer Data Deduplication {#sec-deduplication}
+
+```{python deduplication}
+#| column: screen-inset
+# Create customer dataset with potential duplicates
+customer_setup = conn.execute("""
+    CREATE OR REPLACE TABLE customers AS
+    SELECT * FROM VALUES
+        (1, 'John Smith', 'john.smith@email.com'),
+        (2, 'Jon Smith', 'jonsmith@email.com'),
+        (3, 'Sarah Johnson', 'sarah.j@email.com'),
+        (4, 'Sara Jonson', 'sara.johnson@email.com'),
+        (5, 'Mike Brown', 'mike.brown@email.com'),
+        (6, 'Michael Brown', 'michael.brown@email.com'),
+        (7, 'Jennifer Davis', 'jenifer.davis@email.com'),
+        (8, 'Jenifer Davis', 'jennifer.davis@email.com')
+    AS t(id, name, email)
+""").df()
+
+# Find potential duplicates
+duplicates = conn.execute("""
+    SELECT 
+        c1.id as id1,
+        c1.name as name1,
+        c1.email as email1,
+        c2.id as id2,
+        c2.name as name2,
+        c2.email as email2,
+        jaro_winkler_similarity(c1.name, c2.name) as name_similarity,
+        jaccard(c1.email, c2.email) as email_similarity,
+        CASE 
+            WHEN jaro_winkler_similarity(c1.name, c2.name) > 0.9 THEN 'Likely duplicate'
+            WHEN jaro_winkler_similarity(c1.name, c2.name) > 0.8 THEN 'Possible duplicate'
+            ELSE 'Review needed'
+        END as duplicate_likelihood
+    FROM customers c1
+    CROSS JOIN customers c2
+    WHERE c1.id < c2.id
+        AND (jaro_winkler_similarity(c1.name, c2.name) > 0.7
+             OR jaccard(c1.email, c2.email) > 0.6)
+    ORDER BY name_similarity DESC
+""").df()
+
+display(duplicates)
+```
+
+## Advanced Spell Checker {#sec-spell-checker}
+
+<!-- ```{python spell-checker}
+# Create dictionary
+dictionary_setup = conn.execute("""
+    CREATE OR REPLACE TABLE dictionary AS
+    SELECT * FROM VALUES
+        ('application'), ('appreciate'), ('appropriate'), ('approximate'),
+        ('beautiful'), ('business'), ('beginning'), ('believe'),
+        ('computer'), ('complete'), ('company'), ('compare'),
+        ('definitely'), ('different'), ('development'), ('decision'),
+        ('excellent'), ('experience'), ('environment'), ('example'),
+        ('function'), ('framework'), ('foundation'), ('frequency'),
+        ('government'), ('generation'), ('generally'), ('guarantee'),
+        ('important'), ('information'), ('implementation'), ('integration'),
+        ('occurence'), ('seperate')
+    AS t(word)
+""").df()
+
+# Spell checker function
+def spell_check(misspelled_word, max_suggestions=5):
+    suggestions = conn.execute(f"""
+        SELECT 
+            dictionary.word as suggestion,
+            levenshtein('{misspelled_word}', dictionary.word) as edit_distance,
+            jaro_winkler_similarity('{misspelled_word}', dictionary.word) as similarity,
+            CASE 
+                WHEN levenshtein('{misspelled_word}', dictionary.word) <= 1 THEN 'Excellent'
+                WHEN levenshtein('{misspelled_word}', dictionary.word) <= 2 THEN 'Good'
+                WHEN levenshtein('{misspelled_word}', dictionary.word) <= 3 THEN 'Fair'
+                ELSE 'Poor'
+            END as suggestion_quality
+        FROM dictionary
+        WHERE levenshtein('{misspelled_word}', dictionary.word) <= 4
+        ORDER BY similarity DESC, edit_distance ASC
+        LIMIT {max_suggestions}
+    """).df()
+    return suggestions
+
+# Test spell checker
+test_words = ['paplictaation', 'beutiful', 'definately', 'seporate', 'ccocuernce']
+
+# for word in test_words:
+#     print(f"\nSpell check for: '{word}'")
+#     suggestions = spell_check(word)
+#     display(suggestions)
+``` -->
+
+
+```{python}
+# Create dictionary
+dictionary_setup = conn.execute("""
+    CREATE OR REPLACE TABLE dictionary AS
+    SELECT * FROM VALUES
+        ('application'), ('appreciate'), ('appropriate'), ('approximate'),
+        ('beautiful'), ('business'), ('beginning'), ('believe'),
+        ('computer'), ('complete'), ('company'), ('compare'),
+        ('definitely'), ('different'), ('development'), ('decision'),
+        ('excellent'), ('experience'), ('environment'), ('example'),
+        ('function'), ('framework'), ('foundation'), ('frequency'),
+        ('government'), ('generation'), ('generally'), ('guarantee'),
+        ('important'), ('information'), ('implementation'), ('integration'),
+        ('occurence'), ('seperate')
+    AS t(word)
+""").df()
+
+# Spell checker function
+def spell_check(misspelled_word, max_suggestions=5):
+    suggestions = conn.execute(f"""
+        SELECT 
+            dictionary.word as suggestion,
+            levenshtein('{misspelled_word}', dictionary.word) as edit_distance,
+            jaro_winkler_similarity('{misspelled_word}', dictionary.word) as similarity,
+            CASE 
+                WHEN levenshtein('{misspelled_word}', dictionary.word) <= 1 THEN 'Excellent'
+                WHEN levenshtein('{misspelled_word}', dictionary.word) <= 2 THEN 'Good'
+                WHEN levenshtein('{misspelled_word}', dictionary.word) <= 3 THEN 'Fair'
+                ELSE 'Poor'
+            END as suggestion_quality
+        FROM dictionary
+        WHERE levenshtein('{misspelled_word}', dictionary.word) <= 4
+        ORDER BY similarity DESC, edit_distance ASC
+        LIMIT {max_suggestions}
+    """).df()
+    return suggestions
+
+# Test spell checker
+test_words = ['paplictaation', 'beutiful', 'definately', 'seporate', 'ccocuernce']
+
+# Create a compact summary view
+def create_summary_view():
+   
+    summary_data = []
+    for word in test_words:
+        suggestions = spell_check(word, max_suggestions=1)
+        if not suggestions.empty:
+            top = suggestions.iloc[0]
+            summary_data.append({
+                'Original': word,
+                'Suggestion': top['suggestion'],
+                'Distance': top['edit_distance'],
+                'Similarity': round(top['similarity'], 3),
+                'Quality': top['suggestion_quality']
+            })
+        else:
+            summary_data.append({
+                'Original': word,
+                'Suggestion': 'No match',
+                'Distance': '-',
+                'Similarity': 0,
+                'Quality': 'Poor'
+            })
+    
+    summary_df = pd.DataFrame(summary_data)
+    
+    summary_table = (
+        GT(summary_df)
+        .tab_header(
+            title="📊 Spell Check Summary Report",
+            subtitle="Top suggestion for each misspelled word"
+        )
+        .cols_label(
+            Original="❌ Misspelled",
+            Suggestion="✅ Corrected",
+            Distance="📏 Distance",
+            Similarity="📊 Score",
+            Quality="⭐ Quality"
+        )
+        .data_color(
+            columns="Quality",
+            palette=["#ff6b6b", "#ffa500", "#90ee90", "#32cd32"],
+            domain=["Poor", "Fair", "Good", "Excellent"]
+        )
+        .data_color(
+            columns="Similarity",
+            palette=["#ffebee", "#e8f5e8"],
+            domain=[0, 1]
+        )
+        .fmt_number(
+            columns="Similarity",
+            decimals=3
+        )
+        .tab_options(
+            table_width="100%",
+            container_width="700px"
+        )
+    )
+    
+    return summary_table
+
+# Show the summary
+summary = create_summary_view()
+summary.show()
+```
+
+# Conclusion {#sec-conclusion}
+
+::: {.similarity-info}
+
+1. **Choose the right function** for your specific use case
+2. **Combine multiple functions** for better accuracy in complex scenarios
+3. **Consider performance** implications for real-time applications
+4. **Test with real data** to validate your similarity thresholds
+5. **Use composite scoring** for sophisticated matching systems
+:::
+
+DuckDB's text similarity functions provide a great toolkit for text analysis, fuzzy matching, and data quality improvement. 
+
+Whether you're building a spell checker, implementing fuzzy search, or cleaning up customer data, these functions offer the flexibility and performance needed for production systems.
+
+```{python cleanup}
+# Clean up
+conn.close()
+
+```
