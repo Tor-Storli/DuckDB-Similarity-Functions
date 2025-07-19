@@ -393,7 +393,7 @@ Where:
  $p$ = prefix scaling factor (typically 0.1)  
 
 ### Prefix Bonus
-$\text{Prefix Bonus} = l \times p \times 100$
+$\text{Prefix Bonus} = l \times p \times (1 - Jaro Score) \times 100$
 
 ### Understanding the Prefix Bonus
 
@@ -505,7 +505,7 @@ $\text{Jaro} = \frac{1}{3} \left( \frac{4}{5} + \frac{4}{4} + \frac{4-0}{4} \rig
 **Jaro-Winkler calculation:**  
 $\text{Jaro-Winkler} = 0.933333 + (2 \times 0.1 \times (1 - 0.933333)) = 0.933333 + 0.013333 = 0.946667$    
 
-**Prefix bonus:** $2 \times 0.1 \times 100 = 2.0$ (Note: table shows 1.33, suggesting different calculation)
+**Prefix bonus:** $2 \times 0.1 \times (1 - 0.933333) \times 100 = 1.33$ 
 
 ---
 
@@ -558,7 +558,7 @@ $\text{Jaro} = \frac{1}{3} \left( \frac{9}{9} + \frac{9}{9} + \frac{9-1}{9} \rig
 **Jaro-Winkler calculation:**  
 $\text{Jaro-Winkler} = 0.962963 + (2 \times 0.1 \times (1 - 0.962963)) = 0.962963 + 0.007407 = 0.970370$
 
-**Prefix bonus:** $2 \times 0.1 \times 100 = 2.0$ (Note: table shows 0.74, suggesting different calculation)
+**Prefix bonus:** $2 \times 0.1 \times (1 - 0.962963) \times 100 = 0.74$ 
 
 ---
 

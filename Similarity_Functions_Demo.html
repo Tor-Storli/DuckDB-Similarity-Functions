@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 <meta name="author" content="Tor Storli">
-<meta name="dcterms.date" content="2025-07-15">
+<meta name="dcterms.date" content="2025-07-19">
 
 <title>DuckDB Text Similarity Functions</title>
 <style>
@@ -3357,7 +3357,7 @@ window.Quarto = {
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">July 15, 2025</p>
+      <p class="date">July 19, 2025</p>
     </div>
   </div>
   
@@ -4378,7 +4378,7 @@ window.Quarto = {
 </section>
 <section id="prefix-bonus" class="level3">
 <h3 class="anchored" data-anchor-id="prefix-bonus">Prefix Bonus</h3>
-<p><span class="math inline">\(\text{Prefix Bonus} = l \times p \times 100\)</span></p>
+<p><span class="math inline">\(\text{Prefix Bonus} = l \times p \times (1 - Jaro Score) \times 100\)</span></p>
 </section>
 <section id="understanding-the-prefix-bonus" class="level3">
 <h3 class="anchored" data-anchor-id="understanding-the-prefix-bonus">Understanding the Prefix Bonus</h3>
@@ -4472,7 +4472,7 @@ e (pos 4) matches e (pos 3) ✓</p>
 <p><strong>Common prefix:</strong> “ap” = 2 characters (<span class="math inline">\(l = 2\)</span>)</p>
 <p><strong>Jaro-Winkler calculation:</strong><br>
 <span class="math inline">\(\text{Jaro-Winkler} = 0.933333 + (2 \times 0.1 \times (1 - 0.933333)) = 0.933333 + 0.013333 = 0.946667\)</span></p>
-<p><strong>Prefix bonus:</strong> <span class="math inline">\(2 \times 0.1 \times 100 = 2.0\)</span> (Note: table shows 1.33, suggesting different calculation)</p>
+<p><strong>Prefix bonus:</strong> <span class="math inline">\(2 \times 0.1 \times (1 - 0.933333) \times 100 = 1.33\)</span></p>
 <hr>
 </section>
 <section id="example-2-microsoft-vs-mircosoft" class="level3">
@@ -4516,7 +4516,7 @@ All characters match except for the transposition of ‘c’ and ‘r’</p>
 <p><strong>Common prefix:</strong> “mi” = 2 characters (<span class="math inline">\(l = 2\)</span>)</p>
 <p><strong>Jaro-Winkler calculation:</strong><br>
 <span class="math inline">\(\text{Jaro-Winkler} = 0.962963 + (2 \times 0.1 \times (1 - 0.962963)) = 0.962963 + 0.007407 = 0.970370\)</span></p>
-<p><strong>Prefix bonus:</strong> <span class="math inline">\(2 \times 0.1 \times 100 = 2.0\)</span> (Note: table shows 0.74, suggesting different calculation)</p>
+<p><strong>Prefix bonus:</strong> <span class="math inline">\(2 \times 0.1 \times (1 - 0.962963) \times 100 = 0.74\)</span></p>
 <hr>
 </section>
 <section id="key-observations" class="level2">
